@@ -34,7 +34,7 @@ import glob
 import pdb
 import tqdm
 
-root_path = '/home/vilab/khj/ssd0/wsss_sam'
+root_path = '/workspace/S2C'
 
 sam_path = root_path + '/pretrained/sam_vit_h.pth'
 sam = sam_model_registry['vit_h'](checkpoint=sam_path)
