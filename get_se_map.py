@@ -42,10 +42,10 @@ sam = sam_model_registry['vit_h'](checkpoint=sam_path)
 
 mask_generator = SamAutomaticMaskGenerator(sam)
 
-img_path = root_path + '/' +'/data/VOC2012/JPEGImages/'
+img_path = root_path +'/data/VOC2012/JPEGImages/'
 save_path = root_path + '/se/default/'
 
-img_list_path = root_path + '/' + '/voc12/train_aug.txt'
+img_list_path = root_path + '/voc12/train_aug.txt'
 img_gt_name_list = open(img_list_path).read().splitlines()
 img_name_list = [img_gt_name.split(' ')[0][-15:-4] for img_gt_name in img_gt_name_list]
 
