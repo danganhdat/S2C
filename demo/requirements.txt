@@ -1,0 +1,20 @@
+# FastAPI Backend
+fastapi
+uvicorn
+python-multipart
+
+# PyTorch and Vision
+torch
+torchvision
+
+# Image Processing
+opencv-python
+Pillow
+numpy
+
+# Streamlit UI
+streamlit
+requests
+
+# For SAM (to be added later)
+# git+https://github.com/facebookresearch/segment-anything.git

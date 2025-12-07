@@ -19,9 +19,9 @@ from matplotlib import pyplot as plt
 import pickle
 
 # Custom
-import tools.utils as utils
-from tools.imutils import *
-from evaluation import eval_in_script
+# import tools.utils as utils
+# from tools.imutils import *
+# from evaluation import eval_in_script
 
 from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
 from segment_anything.predictor import SamPredictor
