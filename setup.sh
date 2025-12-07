@@ -11,76 +11,98 @@ log() { echo -e "${GREEN}✔ $1${NC}"; }
 info() { echo -e "${CYAN}→ $1${NC}"; }
 warn() { echo -e "${YELLOW}! $1${NC}"; }
 
+info "STARTING S2C SETUP..."
+
 # 0. Disable auto tmux (optional)
-info "Disabling auto tmux..."
 touch ~/.no_auto_tmux
 
-# 1. Install system packages
+# 1. System dependencies
 info "Installing system dependencies..."
 sudo apt-get update -y
 sudo apt-get install -y \
-    build-essential cmake libeigen3-dev libcrypt-dev graphviz \
-    pkg-config aria2 git wget unzip curl
+    build-essential cmake pkg-config \
+    libeigen3-dev libcrypt-dev graphviz \
+    aria2 git wget unzip curl
 
 log "System dependencies installed."
 
-# 2. Install Python (optional)
-if [ ! -d "$HOME/anaconda3" ]; then
-    info "Installing Anaconda Python..."
-    wget https://repo.anaconda.com/archive/Anaconda3-2025.06-1-Linux-x86_64.sh -O anaconda.sh
-    bash anaconda.sh -b -p $HOME/anaconda3
-    eval "$($HOME/anaconda3/bin/conda shell.bash hook)"
-    echo "source ~/anaconda3/bin/activate" >> ~/.bashrc
-    log "Anaconda installed."
+# 2. Conda environment (Python 3.8)
+info "Setting up conda environment..."
+
+eval "$(conda shell.bash hook)"
+
+if conda env list | grep -w s2c >/dev/null; then
+    warn "Conda env 's2c' already exists — reusing it."
 else
-    warn "Anaconda already installed — skipping."
-    eval "$($HOME/anaconda3/bin/conda shell.bash hook)"
+    conda create -n s2c python=3.8 -y
 fi
 
-# 3. Create Python venv
-info "Creating Python virtual environment..."
-python3 -m venv venv
-source venv/bin/activate
-log "Virtual environment activated."
+conda activate s2c
+log "Activated conda env: s2c"
 
-# 4. Install Python dependencies
-info "Installing PyTorch + dependencies..."
+# 3. REQUIRED: PyTorch 1.8.2 + CUDA 11.1 (compatible w/ S2C)
+info "Installing PyTorch 1.8.2 + CUDA 11.1..."
 
 pip install --upgrade pip setuptools wheel
-pip install torch torchvision torchaudio torch_scatter
 
-pip install opencv-python pycocotools matplotlib onnxruntime onnx gdown
-pip install git+https://github.com/danganhdat/segment-anything.git
+pip install \
+  torch==1.8.2+cu111 \
+  torchvision==0.9.2+cu111 \
+  torchaudio==0.8.2 \
+  -f https://download.pytorch.org/whl/torch_stable.html
 
-if [ -f "requirements.txt" ]; then
-    pip install -r requirements.txt
-else
-    warn "requirements.txt not found — skipping."
-fi
+log "PyTorch installed."
 
-log "Python dependencies installed."
+# 4. torch-scatter (correct wheel!)
+info "Installing torch-scatter wheel..."
 
-# 5. Fix libtiff issue (sometimes required)
-info "Fixing libtiff.so.5 if missing..."
+pip install torch-scatter \
+    -f https://data.pyg.org/whl/torch-1.8.0+cu111.html
+
+log "torch-scatter installed."
+
+# 5. Python dependencies
+info "Installing Python dependencies..."
+
+pip install \
+    opencv-python pycocotools matplotlib \
+    onnxruntime onnx gdown \
+    ftfy regex tqdm pillow imageio \
+    scikit-image scikit-learn pandas \
+    protobuf timm graphviz
+
+# PydenseCRF requires eigen + cython (already installed)
+pip install pydensecrf
+
+# Install SAM
+# pip install "git+https://github.com/facebookresearch/segment-anything.git"
+
+# Optional: install your own forked SAM patch
+pip install "git+https://github.com/danganhdat/segment-anything.git"
+
+log "Python packages installed."
+
+# 6. libtiff fix
+info "Checking libtiff..."
+
 cd /usr/lib/x86_64-linux-gnu/
 if [ ! -f "libtiff.so.5" ]; then
     sudo ln -s libtiff.so.6 libtiff.so.5
     log "libtiff.so.5 symlink created."
 else
-    warn "libtiff.so.5 already exists — skipping."
+    warn "libtiff.so.5 already exists."
 fi
 cd -
 
-# 6. Setup project folders
-info "Preparing folders..."
+# 7. Project folders
 mkdir -p pretrained data
-log "Folders ready."
+log "Folders prepared."
 
-# 7. Download PASCAL VOC 2012
+# 8. Download VOC dataset
 VOC_URL="https://web.archive.org/web/20250604190242/http://host.robots.ox.ac.uk/pascal/VOC/voc2012/VOCtrainval_11-May-2012.tar"
 VOC_TAR="VOC2012.tar"
 
-info "Downloading PASCAL VOC 2012 dataset..."
+info "Downloading PASCAL VOC 2012..."
 
 if [ ! -f "$VOC_TAR" ]; then
     aria2c -x 16 -s 16 "$VOC_URL" -o "$VOC_TAR"
@@ -89,40 +111,38 @@ else
 fi
 
 if [ ! -d "data/VOC2012" ]; then
-    info "Extracting VOC..."
-    mkdir -p data
     tar -xf "$VOC_TAR" -C data/
-
     if [ -d "data/VOCdevkit/VOC2012" ]; then
         mv data/VOCdevkit/VOC2012 data/VOC2012
         rm -rf data/VOCdevkit
     fi
-    log "VOC2012 ready."
+    log "VOC2012 extracted."
 else
-    warn "data/VOC2012 already exists — skipping extract."
+    warn "VOC2012 already exists."
 fi
 
-# 8. Download pretrained weights
+# 9. Download pretrained weights
 info "Downloading pretrained weights..."
 
-# ResNet-38 (Google Drive)
-RESNET_URL="https://drive.google.com/file/d/1fpb4vah3e-Ynx4cv5upUcqnpJFY_FTja/view"
+# ResNet-38
 if [ ! -f "pretrained/resnet_38d.params" ]; then
-    gdown --fuzzy "$RESNET_URL" -O pretrained/resnet_38d.params
+    gdown --fuzzy "https://drive.google.com/file/d/1fpb4vah3e-Ynx4cv5upUcqnpJFY_FTja/view" \
+        -O pretrained/resnet_38d.params
 else
     warn "resnet_38d.params already exists."
 fi
 
 # SAM ViT-H
-SAM_URL="https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth"
 if [ ! -f "pretrained/sam_vit_h.pth" ]; then
-    aria2c -x 16 -s 16 "$SAM_URL" -o pretrained/sam_vit_h.pth
+    aria2c -x 16 -s 16 \
+        "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth" \
+        -o pretrained/sam_vit_h.pth
 else
     warn "sam_vit_h.pth already exists."
 fi
 
 log "All pretrained weights downloaded."
 
-# DONE
-log "FULL SETUP COMPLETE 🎉"
-echo -e "${GREEN}Run your training or scripts now inside the venv.${NC}"
+# ============================================================
+log "🎉 FULL S2C SETUP COMPLETE!"
+echo -e "${GREEN}You can now run training or scripts inside the 's2c' conda env.${NC}"
