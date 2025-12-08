@@ -1,209 +1,167 @@
-"""
-Model loader and utility functions for CAM and SAM
-"""
 import torch
 import torch.nn as nn
-import torchvision.models as models
-from typing import Optional, Tuple
+import torch.nn.functional as F
 import numpy as np
+import mxnet as mx
+import re
 
-class ResNetCAM(nn.Module):
-    """
-    ResNet model modified for Class Activation Mapping (CAM)
-    """
-    def __init__(self, architecture='resnet50', num_classes=1000, pretrained=True):
-        super(ResNetCAM, self).__init__()
-        
-        # Load base model
-        if architecture == 'resnet50':
-            base_model = models.resnet50(pretrained=pretrained)
-        elif architecture == 'resnet101':
-            base_model = models.resnet101(pretrained=pretrained)
-        elif architecture == 'resnet34':
-            base_model = models.resnet34(pretrained=pretrained)
-        else:
-            raise ValueError(f"Unsupported architecture: {architecture}")
-        
-        # Extract features (all layers except final FC and avgpool)
-        self.features = nn.Sequential(*list(base_model.children())[:-2])
-        
-        # Get the number of features from the last conv layer
-        if architecture in ['resnet50', 'resnet101']:
-            num_features = 2048
-        else:  # resnet34
-            num_features = 512
-        
-        # Global Average Pooling
-        self.gap = nn.AdaptiveAvgPool2d((1, 1))
-        
-        # Classifier
-        self.classifier = nn.Linear(num_features, num_classes)
-        
-        # Storage for hooks
-        self.feature_maps = None
-        self.gradients = None
-        
-        # Register hooks
-        self._register_hooks()
-    
-    def _register_hooks(self):
-        """Register forward and backward hooks"""
-        def forward_hook(module, input, output):
-            self.feature_maps = output
-        
-        def backward_hook(module, grad_input, grad_output):
-            self.gradients = grad_output[0]
-        
-        # Hook on the last convolutional layer
-        self.features[-1].register_forward_hook(forward_hook)
-        self.features[-1].register_full_backward_hook(backward_hook)
-    
+class ResBlock(nn.Module):
+    def __init__(self, in_planes, planes, stride=1, dilation=1, mid_planes=None):
+        super(ResBlock, self).__init__()
+        if mid_planes is None:
+            mid_planes = planes
+        self.bn1 = nn.BatchNorm2d(in_planes)
+        self.conv1 = nn.Conv2d(in_planes, mid_planes, kernel_size=3, stride=stride,
+                               padding=dilation, dilation=dilation, bias=False)
+        self.bn2 = nn.BatchNorm2d(mid_planes)
+        self.conv2 = nn.Conv2d(mid_planes, planes, kernel_size=3, stride=1,
+                               padding=dilation, dilation=dilation, bias=False)
+        self.shortcut = None
+        if stride != 1 or in_planes != planes:
+            self.shortcut = nn.Conv2d(in_planes, planes, kernel_size=1, stride=stride, bias=False)
+
     def forward(self, x):
-        # Extract features
-        features = self.features(x)
-        
-        # Global average pooling
-        pooled = self.gap(features)
-        pooled = pooled.view(pooled.size(0), -1)
-        
-        # Classification
-        logits = self.classifier(pooled)
-        
-        return logits
-    
-    def get_cam(self, target_class: Optional[int] = None) -> np.ndarray:
-        """
-        Generate Class Activation Map
-        
-        Args:
-            target_class: Target class index. If None, use predicted class.
+        out = F.relu(self.bn1(x))
+        shortcut = self.shortcut(out) if self.shortcut is not None else x
+        out = self.conv1(out)
+        out = self.conv2(F.relu(self.bn2(out)))
+        out += shortcut
+        return out
+
+class ResNet38d(nn.Module):
+    def __init__(self, num_classes=20, checkpoint_path=None):
+        super(ResNet38d, self).__init__()
+        self.in_planes = 64
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        self.layer1 = self._make_layer(128, 3, stride=1, dilation=1)
+        self.layer2 = self._make_layer(256, 3, stride=2, dilation=1)
+        self.layer3 = self._make_layer(512, 6, stride=1, dilation=2)
+        self.layer4 = self._make_layer(1024, 3, stride=1, dilation=4, mid_planes=512)
+        self.classifier = nn.Conv2d(1024, num_classes, kernel_size=1, bias=True)
+        self.feature_maps = None
+
+        if checkpoint_path:
+            self.load_mxnet_weights(checkpoint_path)
+
+        self.layer4.register_forward_hook(self.save_feature_map)
+
+    def _make_layer(self, planes, num_blocks, stride, dilation, mid_planes=None):
+        layers = []
+        layers.append(ResBlock(self.in_planes, planes, stride, dilation, mid_planes))
+        self.in_planes = planes
+        for i in range(1, num_blocks):
+            layers.append(ResBlock(self.in_planes, planes, 1, dilation, mid_planes))
+        return nn.Sequential(*layers)
+
+    def load_mxnet_weights(self, path):
+        try:
+            mx_save_dict = mx.nd.load(path)
+            pt_state_dict = self.state_dict()
+            converted_weights = {}
+
+            def get_block_index(block_str):
+                if block_str == 'a': return 0
+                match = re.search(r'b(\d+)', block_str)
+                if match: return int(match.group(1))
+                return 0
+
+            for k, v in mx_save_dict.items():
+                k = k.replace('arg:', '').replace('aux:', '')
+                new_k = None
+
+                if 'conv1a' in k:
+                    new_k = k.replace('conv1a', 'conv1').replace('_weight', '.weight').replace('_bias', '.bias')
+
+                match = re.search(r'(res|bn)(\d+)([a-z0-9]+)_branch([a-z0-9]+)_(.+)', k)
+                if match:
+                    prefix_type, stage_idx, block_str, branch_path, param_type = match.groups()
+                    stage_idx = int(stage_idx)
+                    if stage_idx > 5:
+                        continue
+
+                    pt_layer_idx = stage_idx - 1
+                    pt_block_idx = get_block_index(block_str)
+
+                    if branch_path == '2a':
+                        pt_module = 'conv1' if prefix_type == 'res' else 'bn1'
+                    elif branch_path == '2b1':
+                        pt_module = 'conv2' if prefix_type == 'res' else 'bn2'
+                    elif branch_path == '1':
+                        pt_module = 'shortcut'
+                    else:
+                        continue
+
+                    if param_type == 'weight': pt_param = 'weight'
+                    elif param_type == 'bias': pt_param = 'bias'
+                    elif param_type == 'gamma': pt_param = 'weight'
+                    elif param_type == 'beta': pt_param = 'bias'
+                    elif param_type == 'moving_mean': pt_param = 'running_mean'
+                    elif param_type == 'moving_var': pt_param = 'running_var'
+                    else: continue
+
+                    new_k = f"layer{pt_layer_idx}.{pt_block_idx}.{pt_module}.{pt_param}"
+
+                if new_k:
+                    converted_weights[new_k] = torch.from_numpy(v.asnumpy())
+
+            loaded_count = 0
+            missing_layers = []
+
+            for pt_k, pt_v in pt_state_dict.items():
+                if "num_batches_tracked" in pt_k: continue
+                
+                if pt_k in converted_weights:
+                    src_tensor = converted_weights[pt_k]
+                    if src_tensor.shape == pt_v.shape:
+                        self.state_dict()[pt_k].copy_(src_tensor)
+                        loaded_count += 1
+                    else:
+                        try:
+                            self.state_dict()[pt_k].copy_(src_tensor.view(pt_v.shape))
+                            loaded_count += 1
+                        except:
+                            missing_layers.append(f"{pt_k} (Shape mismatch)")
+                else:
+                    if "classifier" not in pt_k:
+                        missing_layers.append(pt_k)
+
+            print(f"Total loaded layers: {loaded_count}")
             
-        Returns:
-            CAM as numpy array
-        """
-        if self.feature_maps is None or self.gradients is None:
-            raise RuntimeError("Forward and backward pass must be done first")
-        
-        # Get gradients and feature maps
-        gradients = self.gradients.detach().cpu().numpy()[0]  # [C, H, W]
-        features = self.feature_maps.detach().cpu().numpy()[0]  # [C, H, W]
-        
-        # Calculate weights as mean of gradients
-        weights = np.mean(gradients, axis=(1, 2))  # [C]
-        
-        # Weighted combination of feature maps
-        cam = np.zeros(features.shape[1:], dtype=np.float32)
-        for i, w in enumerate(weights):
-            cam += w * features[i]
-        
-        # Apply ReLU to focus on positive contributions
+            if len(missing_layers) > 0:
+                print("Missing layers:")
+                for layer in missing_layers:
+                    print(layer)
+            else:
+                print("No missing backbone layers.")
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+
+    def save_feature_map(self, module, input, output):
+        self.feature_maps = output.detach()
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x_gap = F.adaptive_avg_pool2d(x, (1, 1))
+        out = self.classifier(x_gap)
+        return out.view(out.size(0), -1)
+
+    def get_cam(self, target_class):
+        if self.feature_maps is None:
+            return None
+        features = self.feature_maps.cpu().numpy()[0]
+        weights = self.classifier.weight.detach().cpu().numpy().squeeze()
+        if target_class >= len(weights):
+            return None
+        w_c = weights[target_class]
+        cam = (w_c[:, None, None] * features).sum(axis=0)
         cam = np.maximum(cam, 0)
-        
-        # Normalize to [0, 1]
-        if cam.max() > 0:
-            cam = (cam - cam.min()) / (cam.max() - cam.min())
-        
+        cam = cam - np.min(cam)
+        if np.max(cam) != 0:
+            cam = cam / np.max(cam)
         return cam
-
-
-class ModelManager:
-    """
-    Singleton class to manage model loading and caching
-    """
-    _instance = None
-    _models = {}
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(ModelManager, cls).__new__(cls)
-        return cls._instance
-    
-    def get_resnet_cam(self, architecture='resnet50') -> ResNetCAM:
-        """
-        Get or load ResNet CAM model
-        
-        Args:
-            architecture: ResNet architecture ('resnet34', 'resnet50', 'resnet101')
-            
-        Returns:
-            ResNetCAM model
-        """
-        model_key = f"resnet_cam_{architecture}"
-        
-        if model_key not in self._models:
-            print(f"Loading {architecture} model...")
-            model = ResNetCAM(architecture=architecture, pretrained=True)
-            model.eval()
-            
-            # Move to GPU if available
-            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            model = model.to(device)
-            
-            self._models[model_key] = model
-            print(f"Model loaded on {device}")
-        
-        return self._models[model_key]
-    
-    def get_sam_model(self, model_type='vit_h'):
-        """
-        Get or load SAM model (to be implemented)
-        
-        Args:
-            model_type: SAM model type ('vit_h', 'vit_l', 'vit_b')
-            
-        Returns:
-            SAM model
-        """
-        # TODO: Implement SAM model loading
-        raise NotImplementedError("SAM model loading will be implemented next")
-    
-    def clear_cache(self):
-        """Clear all cached models"""
-        self._models.clear()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-
-def get_imagenet_class_name(class_idx: int) -> str:
-    """
-    Get ImageNet class name from index
-    
-    Args:
-        class_idx: Class index (0-999)
-        
-    Returns:
-        Class name string
-    """
-    # Simplified version - in production, load from file
-    imagenet_classes = {
-        0: "tench",
-        1: "goldfish",
-        2: "great white shark",
-        # ... (full list would be loaded from a file)
-        281: "tabby cat",
-        282: "tiger cat",
-        283: "Persian cat",
-        # Add more as needed
-    }
-    
-    return imagenet_classes.get(class_idx, f"class_{class_idx}")
-
-
-def download_sam_checkpoint(model_type='vit_h', save_path='./checkpoints'):
-    """
-    Download SAM checkpoint (to be implemented)
-    
-    Args:
-        model_type: SAM model type
-        save_path: Path to save checkpoint
-    """
-    # TODO: Implement SAM checkpoint download
-    pass
-
-
-if __name__ == "__main__":
-    # Test model loading
-    manager = ModelManager()
-    model = manager.get_resnet_cam('resnet50')
-    print(f"Model loaded successfully: {type(model)}")
-    print(f"Number of parameters: {sum(p.numel() for p in model.parameters()):,}")
