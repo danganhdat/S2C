@@ -9,6 +9,7 @@ chainer
 chainercv
 charset-normalizer
 clip @ git+https://github.com/openai/CLIP.git
+git+https://github.com/danganhdat/segment-anything.git
 coloredlogs
 contourpy
 cycler

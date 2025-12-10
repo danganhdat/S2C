@@ -4,7 +4,7 @@ from __future__ import print_function
 import os
 import os.path as osp
 from tqdm import tqdm
-import pdb
+# import pdb
 import random
 import importlib
 import argparse
@@ -31,7 +31,7 @@ from segment_anything.utils.amg import build_all_layer_point_grids, batch_iterat
 import torch.nn.functional as F
 
 import glob
-import pdb
+# import pdb
 import tqdm
 
 root_path = '/workspace/S2C'

@@ -54,7 +54,7 @@ if __name__ == '__main__':
     # Policy
     parser.add_argument("--lr", default=0.02, type=float)
     parser.add_argument("--wt_dec", default=5e-4, type=float)
-    parser.add_argument("--max_epochs", default=40, type=int)
+    parser.add_argument("--max_epochs", default=50, type=int)
     parser.add_argument("--sstart", default=2, type=int)
 
     # Experiments

@@ -27,40 +27,9 @@ log "System deps installed."
 # eval "$(conda ...)"
 # conda activate ...
 # ------------------------------------------------------------
-
-warn "Make sure your conda env is already ACTIVATED before running this!"
-sleep 1
-
 # 2. pip upgrade
 info "Upgrading pip..."
-pip install --upgrade pip setuptools wheel
-
-# 3. Install PyTorch 2.8.0 (CUDA 12.8)
-info "Installing PyTorch 2.8.0 + CUDA 12.8..."
-pip install torch==2.8.0+cu128 torchvision torchaudio \
-     --index-url https://download.pytorch.org/whl/cu128
-
-log "PyTorch 2.8.0 installed."
-
-# 4. torch-scatter (MUST build from source)
-info "Building torch-scatter from source for torch 2.8.0 + cu128..."
-
-pip install torch-scatter -f https://data.pyg.org/whl/torch-2.8.0+cu128.html
-
-log "torch-scatter installed (compiled)."
-
-# 5. Python deps
-info "Installing Python dependencies..."
-
-pip install \
-    opencv-python pycocotools matplotlib \
-    onnxruntime onnx gdown \
-    ftfy regex tqdm pillow imageio \
-    scikit-image scikit-learn pandas \
-    protobuf timm graphviz
-
-# pydensecrf requires eigen + cython + compiler
-pip install pydensecrf
+pip install --upgrade pip
 
 # Install SAM fork
 pip install "git+https://github.com/danganhdat/segment-anything.git"

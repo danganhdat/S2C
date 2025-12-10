@@ -1,13 +1,13 @@
 # FastAPI Backend
 fastapi
 uvicorn
-python-multipart
 
-# PyTorch and Vision
+# PyTorch and Vision, change to the CPU version if you dont have GPU
 torch
 torchvision
 
-# Image Processing
+# Image 
+python-multipart
 opencv-python
 Pillow
 numpy
