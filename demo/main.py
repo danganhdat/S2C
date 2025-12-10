@@ -11,6 +11,13 @@ import io
 import base64
 from typing import Dict
 import torchvision.models as models
+import os, sys
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+import torchvision.transforms as T
+from networks.resnet38d import Net as ResNet38D
+from segment_anything import sam_model_registry, SamPredictor
 
 app = FastAPI(title="CAM-SAM API")
 
@@ -28,103 +35,44 @@ resnet_model = None
 feature_maps = []
 gradients = []
 
-class ResNet38CAM(nn.Module):
-    def __init__(self, num_classes=1000):
-        super(ResNet38CAM, self).__init__()
-        # Load pretrained ResNet50 as base (ResNet38 is not standard, using ResNet50)
-        base_model = models.resnet50(pretrained=True)
-        
-        # Remove the final fully connected layer
-        self.features = nn.Sequential(*list(base_model.children())[:-2])
-        
-        # Global Average Pooling
-        self.gap = nn.AdaptiveAvgPool2d((1, 1))
-        
-        # Classifier
-        self.classifier = nn.Linear(2048, num_classes)
-        
-        # Hook for feature maps
-        self.features[-1].register_forward_hook(self.save_feature_map)
-        self.features[-1].register_backward_hook(self.save_gradient)
-    
-    def save_feature_map(self, module, input, output):
-        global feature_maps
-        feature_maps.append(output)
-    
-    def save_gradient(self, module, grad_input, grad_output):
-        global gradients
-        gradients.append(grad_output[0])
-    
-    def forward(self, x):
-        x = self.features(x)
-        pooled = self.gap(x)
-        pooled = pooled.view(pooled.size(0), -1)
-        x = self.classifier(pooled)
-        return x
+# device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def load_model():
-    global resnet_model
-    if resnet_model is None:
-        resnet_model = ResNet38CAM(num_classes=1000)
-        resnet_model.eval()
-    return resnet_model
+# Try to load S2C's ResNet38 CAM network (net_main) 
+try:
+    from networks import resnet38d
+except Exception as e:
+    print("ERROR importing networks.resnet38d:", e)
+    resnet_model = None
+else:
+    # create a net_main similar to model_WSSS __init__ usage
+    # choose C and D consistent with repo (VOC20)
+    C = 20   # number of classes for VOC
+    D = 256  # feature dimension used in repo
+    try:
+        net_main = resnet38d.Net_CAM(C=C, D=D)   
+    except Exception as e:
+        print("ERROR instantiating Net_CAM:", e)
+        net_main = None
 
-def preprocess_image(image: Image.Image):
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], 
-                           std=[0.229, 0.224, 0.225])
-    ])
-    return transform(image).unsqueeze(0)
+    # try to load mxnet-converted weights if available (optional)
+    pretrained_params = os.path.join(ROOT, "pretrained", "resnet_38d.params")
+    if net_main is not None and os.path.exists(pretrained_params):
+        try:
+            print("Loading converted resnet38 params...")
+            state_dict = resnet38d.convert_mxnet_to_torch(pretrained_params)
+            net_main.load_state_dict(state_dict, strict=False)
+            print("Loaded converted params.")
+        except Exception as e:
+            print("Warning: failed to load converted params:", e)
+    else:
+        if net_main is not None:
+            print("Pretrained resnet_38d.params not found — using random init for demo.")
 
-def generate_cam(image: Image.Image, target_class=None):
-    global feature_maps, gradients
-    feature_maps = []
-    gradients = []
-    
-    model = load_model()
-    
-    # Preprocess
-    input_tensor = preprocess_image(image)
-    
-    # Forward pass
-    output = model(input_tensor)
-    
-    # Get predicted class if not specified
-    if target_class is None:
-        target_class = output.argmax(dim=1).item()
-    
-    # Backward pass
-    model.zero_grad()
-    one_hot = torch.zeros_like(output)
-    one_hot[0][target_class] = 1
-    output.backward(gradient=one_hot, retain_graph=True)
-    
-    # Get feature maps and gradients
-    features = feature_maps[0].detach().cpu().numpy()[0]
-    grads = gradients[0].detach().cpu().numpy()[0]
-    
-    # Calculate weights
-    weights = np.mean(grads, axis=(1, 2))
-    
-    # Generate CAM
-    cam = np.zeros(features.shape[1:], dtype=np.float32)
-    for i, w in enumerate(weights):
-        cam += w * features[i]
-    
-    # Apply ReLU
-    cam = np.maximum(cam, 0)
-    
-    # Normalize
-    cam = cam - np.min(cam)
-    if np.max(cam) != 0:
-        cam = cam / np.max(cam)
-    
-    # Resize to original image size
-    cam = cv2.resize(cam, (image.width, image.height))
-    
-    return cam, target_class
+    if net_main is not None:
+        net_main = net_main.to(device)
+        net_main.eval()
+    resnet_model = net_main
 
 def overlay_cam_on_image(image: Image.Image, cam: np.ndarray):
     # Convert PIL to numpy
@@ -151,6 +99,12 @@ def image_to_base64(image: Image.Image) -> str:
     img_str = base64.b64encode(buffered.getvalue()).decode()
     return img_str
 
+def load_sam_model(checkpoint_path: str, device="cpu"):
+    sam = sam_model_registry["vit_b"](checkpoint=checkpoint_path)
+    sam.to(device)
+    sam.eval()
+    return sam
+
 @app.get("/")
 async def root():
     return {"message": "CAM-SAM API is running"}
@@ -161,26 +115,97 @@ async def process_image(file: UploadFile = File(...)) -> Dict[str, str]:
         # Read image
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert('RGB')
+
+        # Check model exists
+        global resnet_model
+        if resnet_model is None:
+            raise RuntimeError("resnet_model is not initialized. Check server logs for import/initialization errors.")
+
+        # Preprocess similar to repo (use 448 as used in S2C)
+        preprocess = T.Compose([
+            T.Resize((448, 448)),
+            T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406],
+                        std=[0.229, 0.224, 0.225])
+        ])
+
+        img_tensor = preprocess(image).unsqueeze(0).to(device)
+
+        # Forward
+        with torch.no_grad():
+            out = resnet_model(img_tensor)
+
+        if isinstance(out, dict):
+            # cam: (1, C, h, w)
+            cam = out.get('cam', None)
+
+            # prediction/logits often stored as 'pred' or 'pred_main'
+            if 'pred' in out:
+                preds = out['pred']
+            elif 'pred_main' in out:
+                preds = out['pred_main']
+            elif 'cls' in out:
+                preds = out['cls']
+            else:
+                raise RuntimeError(f"Cannot find prediction key in model output. Keys = {list(out.keys())}")
+        else:
+            raise RuntimeError("Unexpected model output type: {}".format(type(out)))
+
+        if cam is None or preds is None:
+            raise RuntimeError("Model output missing 'cam' or 'pred' keys. Got keys: {}".format(list(out.keys())))
         
-        # Generate CAM
-        cam, predicted_class = generate_cam(image)
+        # get class scores -> convert to vector
+        # preds may be shape (1, C) or (1, C, 1,1)
+        preds = preds.view(-1)              # now shape = (C,)
+        topc = preds.argmax().item()        # scalar int
         
-        # Create overlay image
-        cam_image = overlay_cam_on_image(image, cam)
+        # cam for that class (1, C, h, w)
+        cam_cls = cam[0, topc].cpu().numpy()
+
+        # normalize cam to [0,1]
+        cam_cls = cam_cls - cam_cls.min()
+        if cam_cls.max() > 0:
+            cam_cls = cam_cls / (cam_cls.max() + 1e-8)
+
+        # resize cam to original PIL size
+        cam_resized = cv2.resize(cam_cls, (image.width, image.height))
         
-        # For now, SAM image is the same as CAM (will implement SAM later)
-        sam_image = cam_image
+        # overlay and encode
+        cam_image = overlay_cam_on_image(image, cam_resized)
+        
+        # Implement SAM
+        net_sam = load_sam_model("sam_vit_b_01ec64.pth", device=device)
+        predictor = SamPredictor(net_sam)
+
+        # find local peaks
+        cam_heatmap_raw = cam_cls.copy()
+        y, x = np.unravel_index(np.argmax(cam_heatmap_raw), cam_heatmap_raw.shape)
+        point_coords = np.array([[x, y]])
+        point_labels = np.array([1])  # foreground
+
+        predictor.set_image(np.array(image))
+
+        masks, scores, logits = predictor.predict(
+            point_coords=point_coords,
+            point_labels=point_labels,
+            multimask_output=True
+        )
+
+        mask_np = masks[0].astype(np.uint8) * 255
+        mask_rgba = cv2.applyColorMap(mask_np, cv2.COLORMAP_JET)
+        _, mask_png = cv2.imencode(".png", mask_rgba)
+        sam_b64 = base64.b64encode(mask_png).decode()
         
         # Convert to base64
         original_b64 = image_to_base64(image)
         cam_b64 = image_to_base64(cam_image)
-        sam_b64 = image_to_base64(sam_image)
+        # sam_b64 = image_to_base64(sam_image)
         
         return JSONResponse(content={
             "original": original_b64,
             "cam": cam_b64,
             "sam": sam_b64,
-            "predicted_class": int(predicted_class),
+            "predicted_class": topc,
             "message": "CAM generated successfully. SAM will be implemented next."
         })
         
