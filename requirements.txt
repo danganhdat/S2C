@@ -6,9 +6,9 @@ cachetools
 caerus
 certifi
 chainer
-chainercv
 charset-normalizer
 
+gdown
 kaggle
 clip @ git+https://github.com/openai/CLIP.git
 git+https://github.com/danganhdat/segment-anything.git
@@ -75,11 +75,11 @@ pure_eval
 pyasn1
 pyasn1-modules
 pycocotools
-pydensecrf
+# pydensecrf
 pygments
 pyparsing
 python-dateutil
-python-graphviz
+graphviz
 pytz
 pywavelets
 pyyaml
@@ -95,7 +95,6 @@ scipy
 seaborn
 setuptools
 six
-sklearn
 stack_data
 sympy
 tensorboard
@@ -104,7 +103,6 @@ threadpoolctl
 tifffile
 timm
 torch
-torch-scatter
 torchaudio
 torchvision
 tornado
