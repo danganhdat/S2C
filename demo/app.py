@@ -12,50 +12,50 @@ st.set_page_config(
 )
 
 # GLOBAL CSS STYLES
-st.markdown(
-    """
-    <style>
-    /* Main title */
-    .title {
-        text-align: center;
-        font-size: 42px !important;
-        font-weight: 700 !important;
-        margin-bottom: -10px;
-    }
+# st.markdown(
+#     """
+#     <style>
+#     /* Main title */
+#     .title {
+#         text-align: center;
+#         font-size: 42px !important;
+#         font-weight: 700 !important;
+#         margin-bottom: -10px;
+#     }
 
-    /* Subtitle */
-    .subtitle {
-        text-align: center;
-        color: #888;
-        font-size: 18px !important;
-        margin-bottom: 30px;
-    }
+#     /* Subtitle */
+#     .subtitle {
+#         text-align: center;
+#         color: #888;
+#         font-size: 18px !important;
+#         margin-bottom: 30px;
+#     }
 
-    /* Cards */
-    .result-card {
-        background: #ffffff10;
-        padding: 20px;
-        border-radius: 12px;
-        backdrop-filter: blur(8px);
-        border: 1px solid rgba(255,255,255,0.1);
-        transition: 0.3s;
-    }
-    .result-card:hover {
-        transform: translateY(-3px);
-        border-color: #7f8cff;
-    }
+#     /* Cards */
+#     .result-card {
+#         background: #ffffff10;
+#         padding: 20px;
+#         border-radius: 12px;
+#         backdrop-filter: blur(8px);
+#         border: 1px solid rgba(255,255,255,0.1);
+#         transition: 0.3s;
+#     }
+#     .result-card:hover {
+#         transform: translateY(-3px);
+#         border-color: #7f8cff;
+#     }
 
-    /* Footer */
-    .footer {
-        text-align: center;
-        color: #666;
-        padding-top: 20px;
-        font-size: 14px;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+#     /* Footer */
+#     .footer {
+#         text-align: center;
+#         color: #666;
+#         padding-top: 20px;
+#         font-size: 14px;
+#     }
+#     </style>
+#     """,
+#     unsafe_allow_html=True,
+# )
 
 # Title
 st.markdown("<div class='title'>🔍 CAM–SAM Visualization Tool</div>", unsafe_allow_html=True)
@@ -84,10 +84,14 @@ def get_image_base64(file):
 
 st.markdown("""
 <style>
+:root {
+    --box-height: 240px;
+}
+            
 .upload-box {
     border: 2px dashed #6c63ff;
     border-radius: 15px;
-    height: 240px;
+    height: var(--box-height);
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -96,16 +100,39 @@ st.markdown("""
     padding: 20px;
     cursor: pointer;
     transition: 0.25s;
+    margin-top: calc(var(--box-height) * -1); 
+    position: relative;
+    z-index: 1;
 }
+
 .upload-box:hover {
     background: rgba(108, 99, 255, 0.08);
     border-color: #8d86ff;
 }
 
+/* File Uploader */
+[data-testid="stFileUploader"] {
+width: 100%;
+    height: var(--box-height);
+    position: relative;
+    z-index: 99;
+    opacity: 0; 
+}
+
+[data-testid="stFileUploader"] section {
+    min-height: var(--box-height); 
+    padding: 0;
+}
+            
+[data-testid="stFileUploader"] section > div {
+    display: none;
+}
+            
 .preview-img {
     max-height: 150px;
     max-width: 90%;
     border-radius: 10px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     margin-bottom: 10px;
     object-fit: contain;
 }
@@ -120,13 +147,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# st.markdown("""
-# <div class="upload-box">
-#     <div style="font-size: 50px;">📁</div>
-#     <div style="font-size: 20px;"><b>Drag & Drop your image here</b></div>
-#     <div style="font-size: 14px; color: #b5b5b5;">or Click to select a file</div>
-# </div>
-# """, unsafe_allow_html=True)
+st.markdown("""
+<div class="upload-box">
+    <div style="font-size: 50px;">📁</div>
+    <div style="font-size: 20px;"><b>Drag & Drop your image here</b></div>
+    <div style="font-size: 14px; color: #b5b5b5;">or Click to select a file</div>
+</div>
+""", unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader(
     "Upload",

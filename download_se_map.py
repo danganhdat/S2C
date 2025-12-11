@@ -1,6 +1,7 @@
 import kagglehub
 import shutil
 import os
+import glob
 
 def download_and_copy(dataset, target_dir):
     print(f"Downloading {dataset} ...")
@@ -23,4 +24,7 @@ os.makedirs(TARGET, exist_ok=True)
 download_and_copy("danganhdat/get-se-map-1", TARGET)
 download_and_copy("datanhdang/get-se-map-2", TARGET)
 
+# Count .npy files inside se/default
+files = glob.glob(os.path.join(TARGET, "*.npy"))
+print("Number of .npy files:", len(files))
 print("ALL FILES COPIED TO:", TARGET)

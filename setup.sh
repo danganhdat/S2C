@@ -12,7 +12,7 @@ warn() { echo -e "${YELLOW}! $1${NC}"; }
 
 info "STARTING S2C SETUP (CUDA 12.8.1, PyTorch 2.8.0)..."
 
-# 1. System deps
+# System deps
 info "Installing system packages..."
 sudo apt update -y
 sudo apt install -y \
@@ -27,16 +27,18 @@ log "System deps installed."
 # eval "$(conda ...)"
 # conda activate ...
 # ------------------------------------------------------------
-# 2. pip upgrade
+# pip upgrade
 info "Upgrading pip..."
 pip install --upgrade pip
+
+pip install -r requirements.txt
 
 # Install SAM fork
 pip install "git+https://github.com/danganhdat/segment-anything.git"
 
 log "Python deps installed."
 
-# 6. Fix libtiff bug (PIL)
+# Fix libtiff bug (PIL)
 info "Checking libtiff..."
 cd /usr/lib/x86_64-linux-gnu/
 if [ ! -f "libtiff.so.5" ]; then
@@ -47,12 +49,17 @@ else
 fi
 cd -
 
-# 7. Project dirs
-mkdir -p pretrained data
+# Project dirs
+mkdir -p pretrained data se/default
 log "Folders ready."
 
-# 8. VOC dataset
-VOC_URL="https://web.archive.org/web/20250604190242/http://host.robots.ox.ac.uk/pascal/VOC/voc2012/VOCtrainval_11-May-2012.tar"
+# seg map
+info "Downloading SE maps from KaggleHub..."
+python3 download_se_maps.py
+log "SE maps downloaded into se/default."
+
+# VOC dataset
+VOC_URL="https://datasets.cms.waikato.ac.nz/ufdl/data/pascalvoc2012/VOCtrainval_11-May-2012.tar"
 VOC_TAR="VOC2012.tar"
 
 info "Downloading VOC2012..."
@@ -74,7 +81,7 @@ else
     warn "VOC2012 folder exists."
 fi
 
-# 9. pretrained models
+# pretrained models
 info "Downloading pretrained weights..."
 
 if [ ! -f "pretrained/resnet_38d.params" ]; then
