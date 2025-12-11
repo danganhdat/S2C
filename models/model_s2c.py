@@ -428,8 +428,8 @@ class model_WSSS():
         acc_str = ''
 
         for i in range(len(self.loss_names)):
-            loss_str += self.loss_names[i] + ' : ' + str(round(self.running_loss[i] / self.count, 5)) + ', '
-            writer.add_scalar('Loss/'+self.loss_names[i], round(self.running_loss[i] / self.count, 5), iter)
+            loss_str += self.loss_names[i] + ' : ' + str(round(self.running_loss[i] / (self.count + 1e-6), 5)) + ', '
+            writer.add_scalar('Loss/'+self.loss_names[i], round(self.running_loss[i] / (self.count + 1e-6), 5), iter)
 
         for i in range(len(self.acc_names)):
             if self.right_count[i] != 0:
