@@ -12,8 +12,8 @@ import logging
 import time
 
 import numpy as np
-np.bool = bool  # Fix for mxnet compatibility
-np.object = object # You might need this too
+# np.bool = bool  # Fix for mxnet compatibility
+# np.object = object # You might need this too
 
 import torch
 from torch.utils.data import DataLoader
@@ -158,7 +158,9 @@ if __name__ == '__main__':
         logger.info('Epoch ' + epo_str + ' model is saved!')
         model.save_model(epo, ckpt_path)
 
-        if epo<-1:
+        # if epo<-1:
+        #     continue
+        if epo!= 0 and (epo + 1) % 2 != 0 and (epo + 1) != args.max_epochs:
             continue
         else:
             # # Validation
