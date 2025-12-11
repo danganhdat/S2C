@@ -10,7 +10,7 @@ se/
 data/
 
 networks/
-networks/__pycache__
+networks/__pycache__/
 experiments/
 ckpt/
 *.pth
