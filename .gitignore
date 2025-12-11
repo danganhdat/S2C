@@ -1,2 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
 venv/
-pretrained
+pretrained/
+VOC2012.tar
+se/
+data/
+
+networks/
+networks/__pycache__
+experiments/
+ckpt/
+*.pth

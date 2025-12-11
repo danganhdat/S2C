@@ -12,6 +12,9 @@ import logging
 import time
 
 import numpy as np
+np.bool = bool  # Fix for mxnet compatibility
+np.object = object # You might need this too
+
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -54,7 +57,7 @@ if __name__ == '__main__':
     # Policy
     parser.add_argument("--lr", default=0.02, type=float)
     parser.add_argument("--wt_dec", default=5e-4, type=float)
-    parser.add_argument("--max_epochs", default=50, type=int)
+    parser.add_argument("--max_epochs", default=10, type=int)
     parser.add_argument("--sstart", default=2, type=int)
 
     # Experiments

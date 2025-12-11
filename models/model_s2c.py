@@ -358,6 +358,12 @@ class model_WSSS():
 
         loss.backward()
         self.opt_main.step()
+
+        # ++++ ADD THESE LINES AT THE END OF update() ++++
+        self.running_loss[0] += self.loss_cls.item()
+        self.running_loss[1] += self.loss_ssc.item()
+        self.running_loss[2] += self.loss_cpm.item()
+        self.count += 1
     
     # Initialization for msf-infer
     def infer_init(self):

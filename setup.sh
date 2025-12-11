@@ -13,6 +13,7 @@ warn() { echo -e "${YELLOW}! $1${NC}"; }
 info "STARTING S2C SETUP (CUDA 12.8.1, PyTorch 2.8.0)..."
 
 # System deps
+# System deps
 info "Installing system packages..."
 sudo apt update -y
 sudo apt install -y \
@@ -28,16 +29,18 @@ log "System deps installed."
 # conda activate ...
 # ------------------------------------------------------------
 # pip upgrade
+# pip upgrade
 info "Upgrading pip..."
 pip install --upgrade pip
 
 pip install -r requirements.txt
 
 # Install SAM fork
-pip install "git+https://github.com/danganhdat/segment-anything.git"
+# pip install "git+https://github.com/danganhdat/segment-anything.git"
 
 log "Python deps installed."
 
+# Fix libtiff bug (PIL)
 # Fix libtiff bug (PIL)
 info "Checking libtiff..."
 cd /usr/lib/x86_64-linux-gnu/
@@ -49,6 +52,8 @@ else
 fi
 cd -
 
+# Project dirs
+mkdir -p pretrained data se/default
 # Project dirs
 mkdir -p pretrained data se/default
 log "Folders ready."
@@ -81,6 +86,7 @@ else
     warn "VOC2012 folder exists."
 fi
 
+# pretrained models
 # pretrained models
 info "Downloading pretrained weights..."
 
