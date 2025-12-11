@@ -32,9 +32,8 @@ log "System deps installed."
 # pip upgrade
 info "Upgrading pip..."
 pip install --upgrade pip
-
-pip install -r requirements.txt
-
+pip install gdown kagglehub
+# pip install -r requirements.txt
 # Install SAM fork
 # pip install "git+https://github.com/danganhdat/segment-anything.git"
 
