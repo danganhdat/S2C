@@ -1,7 +1,7 @@
 from huggingface_hub import HfApi
 
 # 1. Configuration
-TOKEN = "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"  # Paste your WRITE token here
+TOKEN = ""  # Paste your WRITE token here
 REPO_ID = "danganhdat/s2c-wsss-exp-001-checkpoints"  # Change to your desired repo name
 FILE_PATH = "/workspace/S2C/experiments/251211_s2c_wsss-sam-to-cam-exp-1/ckpt/001net_main.pth"
 PATH_IN_REPO = "001net_main.pth"  # Name of the file on HuggingFace
