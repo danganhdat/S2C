@@ -11,9 +11,55 @@ st.set_page_config(
     layout="wide"
 )
 
+# GLOBAL CSS STYLES
+st.markdown(
+    """
+    <style>
+    /* Main title */
+    .title {
+        text-align: center;
+        font-size: 42px !important;
+        font-weight: 700 !important;
+        margin-bottom: -10px;
+    }
+
+    /* Subtitle */
+    .subtitle {
+        text-align: center;
+        color: #888;
+        font-size: 18px !important;
+        margin-bottom: 30px;
+    }
+
+    /* Cards */
+    .result-card {
+        background: #ffffff10;
+        padding: 20px;
+        border-radius: 12px;
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(255,255,255,0.1);
+        transition: 0.3s;
+    }
+    .result-card:hover {
+        transform: translateY(-3px);
+        border-color: #7f8cff;
+    }
+
+    /* Footer */
+    .footer {
+        text-align: center;
+        color: #666;
+        padding-top: 20px;
+        font-size: 14px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # Title
-st.title("🔍 Class Activation Mapping (CAM) & Segment Anything Model (SAM)")
-st.markdown("Upload an image to visualize CAM and SAM segmentation")
+st.markdown("<div class='title'>🔍 CAM–SAM Visualization Tool</div>", unsafe_allow_html=True)
+st.markdown("<div class='subtitle'>From-SAM-to-CAMs    •    Class Activation Map    •    Segment Anything Model</div>", unsafe_allow_html=True)
 
 # Backend API URL
 API_URL = "http://localhost:8000/process"
@@ -29,15 +75,125 @@ if 'processed' not in st.session_state:
 if 'results' not in st.session_state:
     st.session_state.results = None
 
-# File uploader
+def get_image_base64(file):
+    if file is None:
+        return ""
+    file_bytes = file.getvalue()
+    encoded = base64.b64encode(file_bytes).decode()
+    return f"data:image/png;base64,{encoded}"
+
+st.markdown("""
+<style>
+:root {
+    --box-height: 240px;
+}
+            
+.upload-box {
+    border: 2px dashed #6c63ff;
+    border-radius: 15px;
+    height: var(--box-height);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    padding: 20px;
+    cursor: pointer;
+    transition: 0.25s;
+    margin-top: calc(var(--box-height) * -1); 
+    position: relative;
+    z-index: 1;
+}
+
+.upload-box:hover {
+    background: rgba(108, 99, 255, 0.08);
+    border-color: #8d86ff;
+}
+
+/* File Uploader */
+[data-testid="stFileUploader"] {
+width: 100%;
+    height: var(--box-height);
+    position: relative;
+    z-index: 99;
+    opacity: 0; 
+}
+
+[data-testid="stFileUploader"] section {
+    min-height: var(--box-height); 
+    padding: 0;
+}
+            
+[data-testid="stFileUploader"] section > div {
+    display: none;
+}
+            
+.preview-img {
+    max-height: 150px;
+    max-width: 90%;
+    border-radius: 10px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    margin-bottom: 10px;
+    object-fit: contain;
+}
+
+.file-name {
+    font-size: 14px;
+    color: #6c63ff;
+    font-weight: bold;
+    word-break: break-all;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+# st.markdown("""
+# <div class="upload-box">
+#     <div style="font-size: 50px;">📁</div>
+#     <div style="font-size: 20px;"><b>Drag & Drop your image here</b></div>
+#     <div style="font-size: 14px; color: #b5b5b5;">or Click to select a file</div>
+# </div>
+# """, unsafe_allow_html=True)
+
 uploaded_file = st.file_uploader(
-    "Choose an image...", 
+    "Upload",
     type=['png', 'jpg', 'jpeg'],
-    help="Upload an image to process with CAM and SAM"
+    label_visibility="collapsed"
 )
+
+if uploaded_file is not None:
+    img_src = get_image_base64(uploaded_file)
+    file_name = uploaded_file.name
+    
+    # Sửa lỗi: Đẩy sát lề trái (xóa indentation)
+    box_content = f"""
+<img src="{img_src}" class="preview-img">
+<div class="file-name">✅ {file_name}</div>
+"""
+else:
+    # Sửa lỗi: Đẩy sát lề trái (xóa indentation)
+    box_content = """
+<div style="font-size: 50px;">📁</div>
+<div style="font-size: 20px;"><b>Drag & Drop your image here</b></div>
+<div style="font-size: 14px; color: #b5b5b5;">or Click to select a file</div>
+"""
+
+st.markdown(f"""
+<div class="upload-box">
+{box_content}
+</div>
+""", unsafe_allow_html=True)
 
 # Process button
 if uploaded_file is not None:
+    img_src = get_image_base64(uploaded_file)
+    file_name = uploaded_file.name
+    
+    html_content = f"""
+        <img src="{img_src}" class="preview-img">
+        <div class="file-name">✅ {file_name}</div>
+        <div style="font-size: 12px; color: #b5b5b5; margin-top:5px;">Click to change image</div>
+    """
     if st.button("🚀 Process Image", type="primary"):
         with st.spinner("Processing image... This may take a few seconds"):
             try:
@@ -78,7 +234,7 @@ if st.session_state.processed and st.session_state.results:
         st.subheader("📷 Original Image")
         if 'original' in results:
             original_img = decode_base64_image(results['original'])
-            st.image(original_img, use_column_width =True)
+            st.image(original_img, use_container_width =True)
         else:
             st.warning("Original image not available")
     
@@ -86,7 +242,7 @@ if st.session_state.processed and st.session_state.results:
         st.subheader("🔥 CAM Visualization")
         if 'cam' in results:
             cam_img = decode_base64_image(results['cam'])
-            st.image(cam_img, use_column_width =True)
+            st.image(cam_img, use_container_width =True)
             st.caption("Class Activation Map shows which regions the model focuses on")
         else:
             st.warning("CAM image not available")
@@ -95,8 +251,8 @@ if st.session_state.processed and st.session_state.results:
         st.subheader("🎨 SAM Segmentation")
         if 'sam' in results:
             sam_img = decode_base64_image(results['sam'])
-            st.image(sam_img, use_column_width =True)
-            st.caption("Segment Anything Model segmentation (Coming soon)")
+            st.image(sam_img, use_container_width =True)
+            st.caption("Segment Anything Model segmentation")
         else:
             st.warning("SAM image not available")
     
