@@ -174,7 +174,7 @@ async def process_image(file: UploadFile = File(...)) -> Dict[str, str]:
         cam_image = overlay_cam_on_image(image, cam_resized)
         
         # Implement SAM
-        net_sam = load_sam_model("sam_vit_b_01ec64.pth", device=device)
+        net_sam = load_sam_model("../pretrained/sam_vit_b_01ec64.pth", device=device)
         predictor = SamPredictor(net_sam)
 
         # find local peaks

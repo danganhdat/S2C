@@ -84,14 +84,10 @@ def get_image_base64(file):
 
 st.markdown("""
 <style>
-:root {
-    --box-height: 240px;
-}
-            
 .upload-box {
     border: 2px dashed #6c63ff;
     border-radius: 15px;
-    height: var(--box-height);
+    height: 240px;
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -100,39 +96,16 @@ st.markdown("""
     padding: 20px;
     cursor: pointer;
     transition: 0.25s;
-    margin-top: calc(var(--box-height) * -1); 
-    position: relative;
-    z-index: 1;
 }
-
 .upload-box:hover {
     background: rgba(108, 99, 255, 0.08);
     border-color: #8d86ff;
 }
 
-/* File Uploader */
-[data-testid="stFileUploader"] {
-width: 100%;
-    height: var(--box-height);
-    position: relative;
-    z-index: 99;
-    opacity: 0; 
-}
-
-[data-testid="stFileUploader"] section {
-    min-height: var(--box-height); 
-    padding: 0;
-}
-            
-[data-testid="stFileUploader"] section > div {
-    display: none;
-}
-            
 .preview-img {
     max-height: 150px;
     max-width: 90%;
     border-radius: 10px;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     margin-bottom: 10px;
     object-fit: contain;
 }
