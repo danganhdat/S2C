@@ -103,7 +103,7 @@ class model_WSSS():
         self.net_main.load_state_dict(resnet38d.convert_mxnet_to_torch('./pretrained/resnet_38d.params'), strict=False)
 
         # +++ ADD THIS +++
-        self.scaler = GradScaler('cuda')
+        # self.scaler = GradScaler()
 
     # Save networks
     def save_model(self, epo, ckpt_path):
@@ -197,177 +197,177 @@ class model_WSSS():
         ######################################################## CPM branch ########################################################
         ############################################################################################################################
 
-        with autocast('cuda'):
-            if use_cpm:
-            
-                # Obtain MS-CAM
-                with torch.no_grad():
-                    self.net_main.eval()
-                    img_05 = F.interpolate(self.img, scale_factor=0.5, mode='bilinear', align_corners=True)
-                    img_10 = self.img
-                    img_15 = F.interpolate(self.img, scale_factor=1.5, mode='bilinear', align_corners=True)
-                    img_20 = F.interpolate(self.img, scale_factor=2.0, mode='bilinear', align_corners=True)
-            
-                    img_ms = [img_05, img_10, img_15, img_20]
-                    
-                    for k, img in enumerate(img_ms):
-                        out = self.net_main(img)
-                        cam_temp = F.relu(F.interpolate(out['cam'], size=(H,W), mode='bilinear', align_corners=False))
-                        cam_temp *= self.label.view(B,C,1,1)
-                        
-                        if k==0:
-                            cam_ms = cam_temp
-                        else:
-                            cam_ms += cam_temp
-                            
-                    cam_max = F.adaptive_max_pool2d(cam_ms, (1, 1))
-                    cam_ms = cam_ms / (cam_max + 1e-5) # (B,C,H,W)
-                        
-                # Sample points from the MS-CAM
-                with torch.no_grad():
-
-                    img_sam = F.interpolate(denorm(self.img)*255, (self.size_sam, self.size_sam), mode='bilinear', align_corners=True)
-                    img_sam = img_sam.to(torch.uint8)
-
-
-                    # For efficient inference, we get embedding first                
-                    features_sam = self.net_sam(run_encoder_only=True, 
-                                                transformed_image=img_sam, 
-                                                original_image_size=(H,W))
-                    del img_sam
-                    
-                    ############################################### Sample local peaks ###############################################
-                    points_all = {}
-                    for i in range(B):
-                        points_img = {}
-                        for ct in self.label[i].nonzero(as_tuple=False)[:,0]:
-                            ct = ct.item()
-                            
-                            cam_target = cam_ms[i,ct]
-                    
-                            # Global maximum                
-                            cam_target_f = cam_target.view(-1)
-                            argmax_indices = torch.argmax(cam_target_f)
-                            coord_w = argmax_indices // W
-                            coord_h = argmax_indices % W
-                            peak_max = torch.cat((coord_w.view(1,1),coord_h.view(1,1)), dim=-1) # (1,2)
-                            peak_max = peak_max.cpu().detach().numpy()
-                    
-                            # Local maximums
-                            cam_target_np = cam_target.cpu().detach().numpy()
-                        
-                            cam_filtered = ndi.maximum_filter(cam_target_np, size=3, mode='constant')
-                            peaks_temp = peak_local_max(cam_filtered, min_distance=20)
-                            peaks_valid = peaks_temp[cam_target_np[peaks_temp[:,0],peaks_temp[:,1]]>self.th_multi]
-                            
-                            # Aggregate all the peaks
-                            peaks = np.concatenate((peak_max, peaks_valid[1:]),axis=0) # (NP,2)
-
-                            points = np.flip(peaks,axis=(-1)) * self.size_sam / H
-                            points = torch.from_numpy(points).cuda()
-                            points_img[ct] = points
-                            
-                        points_all[i] = points_img                    
-                    
-                    ############################################### Get masks using SAM ###############################################
-                    
-                    sam_conf = -1e5*torch.ones_like(cam_ms)
-                    
-                    for i in range(B):
-                        for k in points_all[i].keys():
-                            points = points_all[i][k].unsqueeze(0)
-                            points_label = torch.ones_like(points[:,:,0])
-                            
-                            output_sam = self.net_sam(run_decoder_only=True, 
-                                            features_sam=features_sam[i].unsqueeze(0), 
-                                            original_image_size=(H,W), 
-                                            point_coords=points, 
-                                            point_labels=points_label)
-
-                            mask = output_sam[0] # (1,3,H,W)
-                            conf = output_sam[2] # (1,3,H,W)
-
-                            idx_max_sam = 2 # Empirically, 2 is the best.
-
-                            target_mask = mask[0,idx_max_sam]
-                            target_conf = conf[0,idx_max_sam].unsqueeze(0).unsqueeze(0)
-                            target_conf = F.interpolate(target_conf, (H,W), mode='bilinear', align_corners=False)[0,0]
-                            
-                            # Confidence-based aggregation
-                            sam_conf[i,k][target_mask] = target_conf[target_mask] * cam_ms[i,k][target_mask].mean() # scalar
-                    
-                    temp = sam_conf.max(dim=1)
-                    pgt_sam = temp[1]
-                    pgt_score = temp[0]
-
-                    pgt_sam[pgt_score<0] = 20
-                    pgt_score[pgt_score<0] = 0
-
-            ############################################################################################################################
-            ####################################################### Main branch ########################################################
-            ############################################################################################################################   
-                    
-            self.net_main.train()
-            self.opt_main.zero_grad()
-            
-            loss = 0
-
-            out_main = self.net_main(self.img)
-            feat_main = out_main['feat']
-            cam_main = out_main['cam']
-            pred_main = out_main['pred']
-            
-            cam_main = F.relu(cam_main)
-            cam_max = F.adaptive_max_pool2d(cam_main, (1, 1))
-            cam_main = cam_main / (cam_max + 1e-5)
-            cam_main = F.interpolate(cam_main, size=(H,W), mode='bilinear', align_corners=False) * self.label.view(B,C,1,1)
-            
-            ############################################################################################################################
-            ###################################################### Loss functions ######################################################
-            ############################################################################################################################
-
-            # mere classification loss
-            self.loss_cls = self.W[0] * self.bce(pred_main, self.label)
-            loss += self.loss_cls
-            
-            # SAM-Segment Contrasting (SSC)
-            feat_main = F.interpolate(feat_main, size=(H,W), mode='bilinear', align_corners=False)
-            feat_main = F.normalize(feat_main, dim=1)
-            feat_main_ = feat_main.view(B,D,-1) # (B,D,HW) 
-            index_ = self.se.view(B,1,-1).long() # (B,1,HW)
-            
-            pt = torch_scatter.scatter_mean(feat_main_.detach(), index_) # (B,D,N)
-            pt = F.normalize(pt, dim=1)
-            index_ = index_.squeeze(1)
-            pred_ssc = torch.bmm(pt.permute(0,2,1), feat_main_) # (B,N,HW)
-
-            self.loss_ssc = F.cross_entropy(pred_ssc*self.T, index_, ignore_index=0)
-            if not torch.isnan(self.loss_ssc):
-                loss += self.loss_ssc
-            else:
-                print("loss_ssc is NaN!")
-                self.loss_ssc = torch.zeros_like(self.loss_cls)
-            
-            # CAM-based Prompting Module (CPM)
-            if use_cpm:            
-                cam_bg = 1-cam_main.max(dim=1,keepdims=True)[0]
-                cam_main = torch.cat((cam_main, cam_bg), dim=1)
-                self.loss_cpm = F.cross_entropy(cam_main, pgt_sam, ignore_index=255)
+        # with autocast(dtype=torch.float16):
+        if use_cpm:
+        
+            # Obtain MS-CAM
+            with torch.no_grad():
+                self.net_main.eval()
+                img_05 = F.interpolate(self.img, scale_factor=0.5, mode='bilinear', align_corners=True)
+                img_10 = self.img
+                img_15 = F.interpolate(self.img, scale_factor=1.5, mode='bilinear', align_corners=True)
+                img_20 = F.interpolate(self.img, scale_factor=2.0, mode='bilinear', align_corners=True)
+        
+                img_ms = [img_05, img_10, img_15, img_20]
                 
-                if not torch.isnan(self.loss_cpm):
-                    loss += self.loss_cpm
-                else:
-                    print("loss_cpm is NaN!")
-                    self.loss_cpm = torch.zeros_like(self.loss_cls)
-            else:
-                self.loss_cpm = torch.zeros_like(self.loss_cls)
+                for k, img in enumerate(img_ms):
+                    out = self.net_main(img)
+                    cam_temp = F.relu(F.interpolate(out['cam'], size=(H,W), mode='bilinear', align_corners=False))
+                    cam_temp *= self.label.view(B,C,1,1)
+                    
+                    if k==0:
+                        cam_ms = cam_temp
+                    else:
+                        cam_ms += cam_temp
+                        
+                cam_max = F.adaptive_max_pool2d(cam_ms, (1, 1))
+                cam_ms = cam_ms / (cam_max + 1e-5) # (B,C,H,W)
+                    
+            # Sample points from the MS-CAM
+            with torch.no_grad():
 
-        # loss.backward()
-        # self.opt_main.step()
+                img_sam = F.interpolate(denorm(self.img)*255, (self.size_sam, self.size_sam), mode='bilinear', align_corners=True)
+                img_sam = img_sam.to(torch.uint8)
+
+
+                # For efficient inference, we get embedding first                
+                features_sam = self.net_sam(run_encoder_only=True, 
+                                            transformed_image=img_sam, 
+                                            original_image_size=(H,W))
+                del img_sam
+                
+                ############################################### Sample local peaks ###############################################
+                points_all = {}
+                for i in range(B):
+                    points_img = {}
+                    for ct in self.label[i].nonzero(as_tuple=False)[:,0]:
+                        ct = ct.item()
+                        
+                        cam_target = cam_ms[i,ct]
+                
+                        # Global maximum                
+                        cam_target_f = cam_target.view(-1)
+                        argmax_indices = torch.argmax(cam_target_f)
+                        coord_w = argmax_indices // W
+                        coord_h = argmax_indices % W
+                        peak_max = torch.cat((coord_w.view(1,1),coord_h.view(1,1)), dim=-1) # (1,2)
+                        peak_max = peak_max.cpu().detach().numpy()
+                
+                        # Local maximums
+                        cam_target_np = cam_target.cpu().detach().numpy()
+                    
+                        cam_filtered = ndi.maximum_filter(cam_target_np, size=3, mode='constant')
+                        peaks_temp = peak_local_max(cam_filtered, min_distance=20)
+                        peaks_valid = peaks_temp[cam_target_np[peaks_temp[:,0],peaks_temp[:,1]]>self.th_multi]
+                        
+                        # Aggregate all the peaks
+                        peaks = np.concatenate((peak_max, peaks_valid[1:]),axis=0) # (NP,2)
+
+                        points = np.flip(peaks,axis=(-1)) * self.size_sam / H
+                        points = torch.from_numpy(points).cuda()
+                        points_img[ct] = points
+                        
+                    points_all[i] = points_img                    
+                
+                ############################################### Get masks using SAM ###############################################
+                
+                sam_conf = -1e5*torch.ones_like(cam_ms)
+                
+                for i in range(B):
+                    for k in points_all[i].keys():
+                        points = points_all[i][k].unsqueeze(0)
+                        points_label = torch.ones_like(points[:,:,0])
+                        
+                        output_sam = self.net_sam(run_decoder_only=True, 
+                                        features_sam=features_sam[i].unsqueeze(0), 
+                                        original_image_size=(H,W), 
+                                        point_coords=points, 
+                                        point_labels=points_label)
+
+                        mask = output_sam[0] # (1,3,H,W)
+                        conf = output_sam[2] # (1,3,H,W)
+
+                        idx_max_sam = 2 # Empirically, 2 is the best.
+
+                        target_mask = mask[0,idx_max_sam]
+                        target_conf = conf[0,idx_max_sam].unsqueeze(0).unsqueeze(0)
+                        target_conf = F.interpolate(target_conf, (H,W), mode='bilinear', align_corners=False)[0,0]
+                        
+                        # Confidence-based aggregation
+                        sam_conf[i,k][target_mask] = target_conf[target_mask] * cam_ms[i,k][target_mask].mean() # scalar
+                
+                temp = sam_conf.max(dim=1)
+                pgt_sam = temp[1]
+                pgt_score = temp[0]
+
+                pgt_sam[pgt_score<0] = 20
+                pgt_score[pgt_score<0] = 0
+
+        ############################################################################################################################
+        ####################################################### Main branch ########################################################
+        ############################################################################################################################   
+                
+        self.net_main.train()
+        self.opt_main.zero_grad()
+        
+        loss = 0
+
+        out_main = self.net_main(self.img)
+        feat_main = out_main['feat']
+        cam_main = out_main['cam']
+        pred_main = out_main['pred']
+        
+        cam_main = F.relu(cam_main)
+        cam_max = F.adaptive_max_pool2d(cam_main, (1, 1))
+        cam_main = cam_main / (cam_max + 1e-5)
+        cam_main = F.interpolate(cam_main, size=(H,W), mode='bilinear', align_corners=False) * self.label.view(B,C,1,1)
+        
+        ############################################################################################################################
+        ###################################################### Loss functions ######################################################
+        ############################################################################################################################
+
+        # mere classification loss
+        self.loss_cls = self.W[0] * self.bce(pred_main, self.label)
+        loss += self.loss_cls
+        
+        # SAM-Segment Contrasting (SSC)
+        feat_main = F.interpolate(feat_main, size=(H,W), mode='bilinear', align_corners=False)
+        feat_main = F.normalize(feat_main, dim=1)
+        feat_main_ = feat_main.view(B,D,-1) # (B,D,HW) 
+        index_ = self.se.view(B,1,-1).long() # (B,1,HW)
+        
+        pt = torch_scatter.scatter_mean(feat_main_.detach(), index_) # (B,D,N)
+        pt = F.normalize(pt, dim=1)
+        index_ = index_.squeeze(1)
+        pred_ssc = torch.bmm(pt.permute(0,2,1), feat_main_) # (B,N,HW)
+
+        self.loss_ssc = F.cross_entropy(pred_ssc*self.T, index_, ignore_index=0)
+        if not torch.isnan(self.loss_ssc):
+            loss += self.loss_ssc
+        else:
+            print("loss_ssc is NaN!")
+            self.loss_ssc = torch.zeros_like(self.loss_cls)
+        
+        # CAM-based Prompting Module (CPM)
+        if use_cpm:            
+            cam_bg = 1-cam_main.max(dim=1,keepdims=True)[0]
+            cam_main = torch.cat((cam_main, cam_bg), dim=1)
+            self.loss_cpm = F.cross_entropy(cam_main, pgt_sam, ignore_index=255)
+            
+            if not torch.isnan(self.loss_cpm):
+                loss += self.loss_cpm
+            else:
+                print("loss_cpm is NaN!")
+                self.loss_cpm = torch.zeros_like(self.loss_cls)
+        else:
+            self.loss_cpm = torch.zeros_like(self.loss_cls)
+
+        loss.backward()
+        self.opt_main.step()
         # Scale gradients and step
-        self.scaler.scale(loss).backward()
-        self.scaler.step(self.opt_main)
-        self.scaler.update()
+        # self.scaler.scale(loss).backward()
+        # self.scaler.step(self.opt_main)
+        # self.scaler.update()
 
         # ++++ ADD THESE LINES AT THE END OF update() ++++
         self.running_loss[0] += self.loss_cls.item()

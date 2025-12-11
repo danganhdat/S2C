@@ -59,7 +59,7 @@ log "Folders ready."
 
 # seg map
 info "Downloading SE maps from KaggleHub..."
-python3 download_se_maps.py
+python3 download_se_map.py
 log "SE maps downloaded into se/default."
 
 # VOC dataset
