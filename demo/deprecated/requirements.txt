@@ -1,0 +1,22 @@
+# FastAPI Backend
+fastapi
+uvicorn
+
+# PyTorch and Vision, change to the CPU version if you dont have GPU
+torch
+torchvision
+
+# Image 
+python-multipart
+opencv-python
+Pillow
+numpy
+scipy
+scikit-image
+
+# Streamlit UI
+streamlit
+requests
+
+# For SAM (to be added later)
+git+https://github.com/facebookresearch/segment-anything.git
