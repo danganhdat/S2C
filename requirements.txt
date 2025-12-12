@@ -9,6 +9,7 @@ chainer
 charset-normalizer
 
 gdown
+huggingface_hub
 kaggle
 clip @ git+https://github.com/openai/CLIP.git
 # git+https://github.com/danganhdat/segment-anything.git
