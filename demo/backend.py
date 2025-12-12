@@ -139,7 +139,7 @@ def preprocess_image(image: Image.Image, target_size: int = 448) -> Image.Image:
     image_resized = image.resize((new_w, new_h), Image.BILINEAR)
     return image_resized
 
-def get_cam(model, image: Image.Image, scales=[0.5, 1.0, 1.5, 2.0]) -> np.ndarray:
+def get_cam(model, image: Image.Image, scales=[0.5, 1.0, 1.5, 2.0]) -> tuple:
     """
     Generate Multi-Scale Class Activation Map from the model.
     
@@ -149,8 +149,20 @@ def get_cam(model, image: Image.Image, scales=[0.5, 1.0, 1.5, 2.0]) -> np.ndarra
         scales: List of scales for multi-scale inference
         
     Returns:
-        cam: numpy array (H, W) normalized to [0, 1] for top predicted class
+        tuple: (cam, class_name, class_idx, score)
+            - cam: numpy array (H, W) normalized to [0, 1] for top predicted class
+            - class_name: name of the predicted class
+            - class_idx: index of the predicted class
+            - score: confidence score
     """
+    # VOC class names
+    VOC_CLASSES = [
+        'aeroplane', 'bicycle', 'bird', 'boat', 'bottle',
+        'bus', 'car', 'cat', 'chair', 'cow',
+        'diningtable', 'dog', 'horse', 'motorbike', 'person',
+        'pottedplant', 'sheep', 'sofa', 'train', 'tvmonitor'
+    ]
+    
     w, h = image.size
     
     # Transform
@@ -197,7 +209,10 @@ def get_cam(model, image: Image.Image, scales=[0.5, 1.0, 1.5, 2.0]) -> np.ndarra
     with torch.no_grad():
         img_10 = F.interpolate(img_tensor, size=(448, 448), mode='bilinear', align_corners=True)
         preds = model(img_10)['pred'].view(-1)
-        top_class = preds.argmax().item()
+        probs = torch.sigmoid(preds)
+        top_score, top_class = torch.max(probs, dim=0)
+        top_class = top_class.item()
+        top_score = top_score.item()
     
     # Extract CAM for top class and resize to original image size
     final_cam = norm_ms_cam[0, top_class].cpu().numpy()
@@ -205,7 +220,9 @@ def get_cam(model, image: Image.Image, scales=[0.5, 1.0, 1.5, 2.0]) -> np.ndarra
     import cv2
     final_cam = cv2.resize(final_cam, (w, h), interpolation=cv2.INTER_LINEAR)
     
-    return final_cam
+    class_name = VOC_CLASSES[top_class]
+    
+    return final_cam, class_name, top_class, top_score
 
 def get_peaks(cam: np.ndarray, threshold: float = 0.5) -> np.ndarray:
     """
@@ -468,7 +485,7 @@ async def process_image(file: UploadFile = File(...)) -> Dict:
         # =====================================================================
         
         # Baseline CAM
-        baseline_cam = get_cam(baseline, processed_image)
+        baseline_cam, baseline_class_name, baseline_class_idx, baseline_score = get_cam(baseline, processed_image)
         baseline_cam_overlay = overlay_cam_on_image(processed_image, baseline_cam)
         
         # Baseline SAM (using CAM peaks as prompts)
@@ -477,7 +494,7 @@ async def process_image(file: UploadFile = File(...)) -> Dict:
         baseline_sam_overlay = overlay_mask_on_image(processed_image, baseline_sam_mask, color=(0, 255, 0))
         
         # Latest CAM
-        latest_cam = get_cam(latest, processed_image)
+        latest_cam, latest_class_name, latest_class_idx, latest_score = get_cam(latest, processed_image)
         latest_cam_overlay = overlay_cam_on_image(processed_image, latest_cam)
         
         # Latest SAM (using CAM peaks as prompts)
@@ -503,8 +520,12 @@ async def process_image(file: UploadFile = File(...)) -> Dict:
         ]
         
         grid_labels = [
-            "Original", "Baseline CAM", "Baseline SAM",
-            "Original", "Latest CAM", "Latest SAM"
+            "Original", 
+            f"Baseline: {baseline_class_name}", 
+            "Baseline SAM",
+            "Original", 
+            f"Latest: {latest_class_name}", 
+            "Latest SAM"
         ]
         
         grid = create_grid_image(grid_images, rows=2, cols=3)
@@ -532,6 +553,16 @@ async def process_image(file: UploadFile = File(...)) -> Dict:
             "latest_sam": image_to_base64(latest_sam_overlay),
             "grid": image_to_base64(grid),
             "grid_path": filepath,
+            "baseline_prediction": {
+                "class_name": baseline_class_name,
+                "class_idx": baseline_class_idx,
+                "score": baseline_score
+            },
+            "latest_prediction": {
+                "class_name": latest_class_name,
+                "class_idx": latest_class_idx,
+                "score": latest_score
+            },
             "message": "Image processed successfully"
         }
         

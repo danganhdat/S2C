@@ -200,8 +200,13 @@ if page == "🎯 Demo":
                     
                     st.markdown('<p class="result-header">📊 Results Comparison</p>', unsafe_allow_html=True)
                     
+                    # Get prediction info
+                    baseline_pred = data.get("baseline_prediction", {})
+                    latest_pred = data.get("latest_prediction", {})
+                    
                     # Row 1: Baseline
-                    st.markdown("### 🔹 Baseline Model")
+                    baseline_text = f"**{baseline_pred.get('class_name', 'N/A').upper()}**"
+                    st.markdown(f"### 🔹 Baseline Model → Predicted: {baseline_text}")
                     col1, col2, col3 = st.columns(3)
                     
                     with col1:
@@ -213,20 +218,21 @@ if page == "🎯 Demo":
                     with col2:
                         st.image(
                             base64_to_image(data["baseline_cam"]),
-                            caption="Baseline CAM",
+                            caption=f"CAM: {baseline_pred.get('class_name', 'N/A')}",
                             width='stretch'
                         )
                     with col3:
                         st.image(
                             base64_to_image(data["baseline_sam"]),
-                            caption="Baseline SAM Enhanced",
+                            caption="SAM Enhanced",
                             width='stretch'
                         )
                     
                     st.markdown("---")
                     
                     # Row 2: Latest
-                    st.markdown("### 🔸 Latest Model")
+                    latest_text = f"**{latest_pred.get('class_name', 'N/A').upper()}**"
+                    st.markdown(f"### 🔸 Latest Model → Predicted: {latest_text}")
                     col1, col2, col3 = st.columns(3)
                     
                     with col1:
@@ -238,13 +244,13 @@ if page == "🎯 Demo":
                     with col2:
                         st.image(
                             base64_to_image(data["latest_cam"]),
-                            caption="Latest CAM",
+                            caption=f"CAM: {latest_pred.get('class_name', 'N/A')}",
                             width='stretch'
                         )
                     with col3:
                         st.image(
                             base64_to_image(data["latest_sam"]),
-                            caption="Latest SAM Enhanced",
+                            caption="SAM Enhanced",
                             width='stretch'
                         )
                     
