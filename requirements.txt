@@ -12,8 +12,8 @@ gdown
 huggingface_hub
 kaggle
 clip @ git+https://github.com/openai/CLIP.git
-# git+https://github.com/danganhdat/segment-anything.git
-git+https://github.com/facebookresearch/segment-anything
+git+https://github.com/danganhdat/segment-anything.git
+# git+https://github.com/facebookresearch/segment-anything
 
 coloredlogs
 contourpy

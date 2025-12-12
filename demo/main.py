@@ -3,9 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision.transforms as transforms
 from PIL import Image
 import numpy as np
+if not hasattr(np, 'bool'):
+    np.bool = bool
 import cv2
 import io
 import base64
@@ -18,6 +21,8 @@ if ROOT not in sys.path:
 import torchvision.transforms as T
 from networks.resnet38d import Net as ResNet38D
 from segment_anything import sam_model_registry, SamPredictor
+from scipy import ndimage as ndi
+from skimage.feature import peak_local_max
 
 app = FastAPI(title="CAM-SAM API")
 
@@ -55,8 +60,8 @@ else:
         print("ERROR instantiating Net_CAM:", e)
         net_main = None
 
-    # try to load mxnet-converted weights if available (optional)
-    pretrained_params = os.path.join(ROOT, "pretrained", "resnet_38d.params")
+    # load mxnet-converted weights 
+    pretrained_params = os.path.join(ROOT, "demo", "resnet_38d.params")
     if net_main is not None and os.path.exists(pretrained_params):
         try:
             print("Loading converted resnet38 params...")
@@ -73,6 +78,42 @@ else:
         net_main = net_main.to(device)
         net_main.eval()
     resnet_model = net_main
+
+
+def get_ms_cam(model, image, scales=[0.5, 1.0, 1.5, 2.0]):
+    W_org, H_org = image.size
+
+    img_tensor = T.ToTensor()(image).unsqueeze(0).to(device)
+    img_tensor = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])(img_tensor)
+
+    ms_cam_list = []
+    
+    for s in scales:
+        target_size = (int(448 * s), int(448 * s))
+        img_s = F.interpolate(img_tensor, size=target_size, mode='bilinear', align_corners=True)
+        
+        img_s_flip = torch.flip(img_s, dims=[-1])
+        
+        img_batch = torch.cat([img_s, img_s_flip], dim=0)
+        
+        with torch.no_grad():
+            out = model(img_batch)
+            cam = F.relu(out['cam']) 
+            
+        cam = F.interpolate(cam, size=(448, 448), mode='bilinear', align_corners=False)
+
+        cam_flip_back = torch.flip(cam[1:2], dims=[-1])
+        
+        ms_cam_list.append(cam[0:1])      
+        ms_cam_list.append(cam_flip_back)  
+        
+    combined_cam = torch.sum(torch.stack(ms_cam_list), dim=0) 
+    
+    cam_max = torch.max(combined_cam.view(1, 20, -1), dim=-1)[0].view(1, 20, 1, 1)
+    norm_ms_cam = combined_cam / (cam_max + 1e-5)
+    
+    return norm_ms_cam
+
 
 def overlay_cam_on_image(image: Image.Image, cam: np.ndarray):
     # Convert PIL to numpy
@@ -120,70 +161,67 @@ async def process_image(file: UploadFile = File(...)) -> Dict[str, str]:
         global resnet_model
         if resnet_model is None:
             raise RuntimeError("resnet_model is not initialized. Check server logs for import/initialization errors.")
+        
+        norm_ms_cam = get_ms_cam(resnet_model, image)
 
-        # Preprocess similar to repo (use 448 as used in S2C)
-        preprocess = T.Compose([
-            T.Resize((448, 448)),
-            T.ToTensor(),
-            T.Normalize(mean=[0.485, 0.456, 0.406],
-                        std=[0.229, 0.224, 0.225])
-        ])
+        img_10 = T.Compose([T.Resize((448, 448)), T.ToTensor(), 
+                        T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])(image).unsqueeze(0).to(device)
+        
+        VOC_CLASSES = [
+            'aeroplane', 'bicycle', 'bird', 'boat', 'bottle',
+            'bus', 'car', 'cat', 'chair', 'cow',
+            'diningtable', 'dog', 'horse', 'motorbike', 'person',
+            'pottedplant', 'sheep', 'sofa', 'train', 'tvmonitor'
+        ]
 
-        img_tensor = preprocess(image).unsqueeze(0).to(device)
-
-        # Forward
         with torch.no_grad():
-            out = resnet_model(img_tensor)
+            preds = resnet_model(img_10)['pred'].view(-1)
 
-        if isinstance(out, dict):
-            # cam: (1, C, h, w)
-            cam = out.get('cam', None)
+        topc = preds.argmax().item()
 
-            # prediction/logits often stored as 'pred' or 'pred_main'
-            if 'pred' in out:
-                preds = out['pred']
-            elif 'pred_main' in out:
-                preds = out['pred_main']
-            elif 'cls' in out:
-                preds = out['cls']
-            else:
-                raise RuntimeError(f"Cannot find prediction key in model output. Keys = {list(out.keys())}")
-        else:
-            raise RuntimeError("Unexpected model output type: {}".format(type(out)))
+        top_score, top_idx = torch.max(preds, dim=0)
+        top_class_name = VOC_CLASSES[top_idx.item()]
 
-        if cam is None or preds is None:
-            raise RuntimeError("Model output missing 'cam' or 'pred' keys. Got keys: {}".format(list(out.keys())))
+        print(f"Model đang nhìn thấy: {top_class_name} (Score: {top_score.item():.4f})")
+    
+        final_cam = norm_ms_cam[0, topc].cpu().numpy()
         
-        # get class scores -> convert to vector
-        # preds may be shape (1, C) or (1, C, 1,1)
-        preds = preds.view(-1)              # now shape = (C,)
-        topc = preds.argmax().item()        # scalar int
+        cam_resized = cv2.resize(final_cam, (image.width, image.height), interpolation=cv2.INTER_LINEAR)
         
-        # cam for that class (1, C, h, w)
-        cam_cls = cam[0, topc].cpu().numpy()
-
-        # normalize cam to [0,1]
-        cam_cls = cam_cls - cam_cls.min()
-        if cam_cls.max() > 0:
-            cam_cls = cam_cls / (cam_cls.max() + 1e-8)
-
-        # resize cam to original PIL size
-        cam_resized = cv2.resize(cam_cls, (image.width, image.height))
+        # cam_resized[cam_resized < 0.20] = 0 
         
-        # overlay and encode
         cam_image = overlay_cam_on_image(image, cam_resized)
         
         # Implement SAM
         net_sam = load_sam_model("../pretrained/sam_vit_b_01ec64.pth", device=device)
         predictor = SamPredictor(net_sam)
 
-        # find local peaks
-        cam_heatmap_raw = cam_cls.copy()
-        y, x = np.unravel_index(np.argmax(cam_heatmap_raw), cam_heatmap_raw.shape)
-        point_coords = np.array([[x, y]])
-        point_labels = np.array([1])  # foreground
+        image_rgb = np.array(image.convert("RGB"))
+        predictor.set_image(image_rgb)
 
-        predictor.set_image(np.array(image))
+        # -- Find points prompt --
+        cam_target_np = final_cam 
+        h_org, w_org = cam_target_np.shape
+
+        # Global Max
+        argmax_indices = np.argmax(cam_target_np)
+        gy, gx = np.unravel_index(argmax_indices, cam_target_np.shape)
+        peak_max = np.array([[gx, gy]])
+
+        # Local Peaks
+        cam_filtered = ndi.maximum_filter(cam_target_np, size=3, mode='constant')
+        peaks_temp = peak_local_max(cam_filtered, min_distance=20)
+
+        th_multi = 0.5 
+        peaks_valid = peaks_temp[cam_target_np[peaks_temp[:,0], peaks_temp[:,1]] > th_multi]
+
+        if len(peaks_valid) > 0:
+            peaks_valid_xy = np.flip(peaks_valid, axis=1)
+            point_coords = np.concatenate((peak_max, peaks_valid_xy), axis=0)
+        else:
+            point_coords = peak_max
+
+        point_labels = np.ones(len(point_coords), dtype=int)
 
         masks, scores, logits = predictor.predict(
             point_coords=point_coords,
@@ -191,7 +229,26 @@ async def process_image(file: UploadFile = File(...)) -> Dict[str, str]:
             multimask_output=True
         )
 
-        mask_np = masks[0].astype(np.uint8) * 255
+        idx_max_sam = 2
+        final_mask = masks[idx_max_sam]
+
+        # Morphology
+        # kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        # mask_cleaned = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel)
+        # mask_cleaned = cv2.morphologyEx(mask_cleaned, cv2.MORPH_OPEN, kernel)
+
+        # Gaussian Blur
+        # mask_blurred = cv2.GaussianBlur(mask_cleaned, (5, 5), 0)
+
+        # h, w = final_mask.shape
+        # seg_map_bgr = np.zeros((h, w, 3), dtype=np.uint8)
+
+        # seg_map_bgr[final_mask > 0] = [0, 0, 255]
+
+        # _, buffer = cv2.imencode(".png", seg_map_bgr)
+        # sam_b64 = base64.b64encode(buffer).decode()
+
+        mask_np = final_mask.astype(np.uint8) * 255
         mask_rgba = cv2.applyColorMap(mask_np, cv2.COLORMAP_JET)
         _, mask_png = cv2.imencode(".png", mask_rgba)
         sam_b64 = base64.b64encode(mask_png).decode()
@@ -199,7 +256,6 @@ async def process_image(file: UploadFile = File(...)) -> Dict[str, str]:
         # Convert to base64
         original_b64 = image_to_base64(image)
         cam_b64 = image_to_base64(cam_image)
-        # sam_b64 = image_to_base64(sam_image)
         
         return JSONResponse(content={
             "original": original_b64,

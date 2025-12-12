@@ -12,8 +12,8 @@ import logging
 import time
 
 import numpy as np
-# np.bool = bool  # Fix for mxnet compatibility
-# np.object = object # You might need this too
+np.bool = bool  # Fix for mxnet compatibility
+np.object = object # You might need this too
 
 import torch
 from torch.utils.data import DataLoader
@@ -57,7 +57,7 @@ if __name__ == '__main__':
     # Policy
     parser.add_argument("--lr", default=0.02, type=float)
     parser.add_argument("--wt_dec", default=5e-4, type=float)
-    parser.add_argument("--max_epochs", default=10, type=int)
+    parser.add_argument("--max_epochs", default=40, type=int)
     parser.add_argument("--sstart", default=2, type=int)
 
     # Experiments
@@ -160,7 +160,7 @@ if __name__ == '__main__':
 
         # if epo<-1:
         #     continue
-        if epo!= 0 and (epo + 1) % 2 != 0 and (epo + 1) != args.max_epochs:
+        if epo!= 0 and (epo + 1) % 4 != 0 and (epo + 1) != args.max_epochs:
             continue
         else:
             # # Validation
