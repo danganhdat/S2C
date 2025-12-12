@@ -11,6 +11,8 @@ python-multipart
 opencv-python
 Pillow
 numpy
+scipy
+scikit-image
 
 # Streamlit UI
 streamlit

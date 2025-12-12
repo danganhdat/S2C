@@ -61,7 +61,7 @@ else:
         net_main = None
 
     # load mxnet-converted weights 
-    pretrained_params = os.path.join(ROOT, "demo", "resnet_38d.params")
+    pretrained_params = "../pretrained/011net_main.pth"
     if net_main is not None and os.path.exists(pretrained_params):
         try:
             print("Loading converted resnet38 params...")
